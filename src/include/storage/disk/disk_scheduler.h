@@ -13,8 +13,10 @@
 #pragma once
 
 #include <future>  // NOLINT
+#include <memory>
 #include <optional>
 #include <thread>  // NOLINT
+#include <vector>
 
 #include "common/channel.h"
 #include "storage/disk/disk_manager.h"
@@ -40,6 +42,8 @@ struct DiskRequest {
 
   /** Callback used to signal to the request issuer when the request has been completed. */
   std::promise<bool> callback_;
+
+  std::optional<std::future<bool>> pre_cond_{std::nullopt};
 };
 
 /**
@@ -51,12 +55,14 @@ struct DiskRequest {
  */
 class DiskScheduler {
  public:
+  using Chan = Channel<std::optional<DiskRequest>>;
   explicit DiskScheduler(DiskManager *disk_manager);
   ~DiskScheduler();
 
   void Schedule(DiskRequest r);
 
-  void StartWorkerThread();
+  void StartWorkerThread(const std::shared_ptr<Chan> &chan);
+  void ProcessDiskRequest(DiskRequest r);
 
   using DiskSchedulerPromise = std::promise<bool>;
 
@@ -92,8 +98,9 @@ class DiskScheduler {
   DiskManager *disk_manager_ __attribute__((__unused__));
   /** A shared queue to concurrently schedule and process requests. When the DiskScheduler's destructor is called,
    * `std::nullopt` is put into the queue to signal to the background thread to stop execution. */
-  Channel<std::optional<DiskRequest>> request_queue_;
+  std::vector<std::shared_ptr<Chan>> request_queues_;
   /** The background thread responsible for issuing scheduled requests to the disk manager. */
-  std::optional<std::thread> background_thread_;
+  std::vector<std::thread> background_threads_;
+  size_t pool_size_{1024};
 };
 }  // namespace bustub
