@@ -424,8 +424,7 @@ auto BufferPoolManager::FindOrLoadPage(page_id_t page_id) -> std::shared_ptr<Fra
     // Case 1: Page already in memory
     if (auto iter = page_table_.find(page_id); iter != page_table_.end()) {
       frame_header = frames_[iter->second];
-      replacer_->RecordAccess(iter->second);
-      replacer_->SetEvictable(iter->second, false);
+      replacer_->RecordAccessAndSetEvictable(iter->second, false);
       frame_header->pin_count_++;
       return frame_header;
     }
@@ -440,8 +439,7 @@ auto BufferPoolManager::FindOrLoadPage(page_id_t page_id) -> std::shared_ptr<Fra
     page_table_.erase(frame_header->page_id_);
     page_table_.emplace(page_id, frame_id);
     // Update replacer
-    replacer_->RecordAccess(frame_id);
-    replacer_->SetEvictable(frame_id, false);
+    replacer_->RecordAccessAndSetEvictable(frame_id, false);
     // Reset frame state
     assert(frame_header->pin_count_ == 0);
     frame_header->pin_count_.store(1);

@@ -328,47 +328,49 @@ void MixTest1Call() {
     // create and fetch header_page
     page_id_t page_id = bpm->NewPage();
 
-    // create b+ tree
-    BPlusTree<GenericKey<8>, RID, GenericComparator<8>> tree("foo_pk", page_id, bpm, comparator, 3, 5);
+    {
+      // create b+ tree
+      BPlusTree<GenericKey<8>, RID, GenericComparator<8>> tree("foo_pk", page_id, bpm, comparator, 3, 5);
 
-    // first, populate index
-    std::vector<int64_t> for_insert;
-    std::vector<int64_t> for_delete;
-    int64_t sieve = 2;  // divide evenly
-    int64_t total_keys = 1000;
-    for (int64_t i = 1; i <= total_keys; i++) {
-      if (i % sieve == 0) {
-        for_insert.push_back(i);
-      } else {
-        for_delete.push_back(i);
+      // first, populate index
+      std::vector<int64_t> for_insert;
+      std::vector<int64_t> for_delete;
+      int64_t sieve = 2;  // divide evenly
+      int64_t total_keys = 1000;
+      for (int64_t i = 1; i <= total_keys; i++) {
+        if (i % sieve == 0) {
+          for_insert.push_back(i);
+        } else {
+          for_delete.push_back(i);
+        }
       }
-    }
-    // Insert all the keys to delete
-    InsertHelper(&tree, for_delete);
+      // Insert all the keys to delete
+      InsertHelper(&tree, for_delete);
 
-    auto insert_task = [&](int tid) { InsertHelper(&tree, for_insert); };
-    auto delete_task = [&](int tid) { DeleteHelper(&tree, for_delete); };
-    std::vector<std::function<void(int)>> tasks;
-    tasks.emplace_back(insert_task);
-    tasks.emplace_back(delete_task);
-    std::vector<std::thread> threads;
-    size_t num_threads = 10;
-    for (size_t i = 0; i < num_threads; i++) {
-      threads.emplace_back(tasks[i % tasks.size()], i);
-    }
-    for (size_t i = 0; i < num_threads; i++) {
-      threads[i].join();
-    }
+      auto insert_task = [&](int tid) { InsertHelper(&tree, for_insert); };
+      auto delete_task = [&](int tid) { DeleteHelper(&tree, for_delete); };
+      std::vector<std::function<void(int)>> tasks;
+      tasks.emplace_back(insert_task);
+      tasks.emplace_back(delete_task);
+      std::vector<std::thread> threads;
+      size_t num_threads = 10;
+      for (size_t i = 0; i < num_threads; i++) {
+        threads.emplace_back(tasks[i % tasks.size()], i);
+      }
+      for (size_t i = 0; i < num_threads; i++) {
+        threads[i].join();
+      }
 
-    int64_t size = 0;
+      int64_t size = 0;
 
-    for (auto iter = tree.Begin(); iter != tree.End(); ++iter) {
-      const auto &pair = *iter;
-      ASSERT_EQ((pair.first).ToString(), for_insert[size]);
-      size++;
+      for (auto iter = tree.Begin(); iter != tree.End(); ++iter) {
+        const auto &pair = *iter;
+        ASSERT_EQ((pair.first).ToString(), for_insert[size]);
+        size++;
+      }
+
+      ASSERT_EQ(size, for_insert.size());
     }
-
-    ASSERT_EQ(size, for_insert.size());
 
     delete disk_manager;
     delete bpm;
@@ -389,54 +391,56 @@ void MixTest2Call() {
     // create and fetch header_page
     page_id_t page_id = bpm->NewPage();
 
-    // create b+ tree
-    BPlusTree<GenericKey<8>, RID, GenericComparator<8>> tree("foo_pk", page_id, bpm, comparator);
+    {
+      // create b+ tree
+      BPlusTree<GenericKey<8>, RID, GenericComparator<8>> tree("foo_pk", page_id, bpm, comparator);
 
-    // Add perserved_keys
-    std::vector<int64_t> perserved_keys;
-    std::vector<int64_t> dynamic_keys;
-    int64_t total_keys = 1000;
-    int64_t sieve = 5;
-    for (int64_t i = 1; i <= total_keys; i++) {
-      if (i % sieve == 0) {
-        perserved_keys.push_back(i);
-      } else {
-        dynamic_keys.push_back(i);
+      // Add perserved_keys
+      std::vector<int64_t> perserved_keys;
+      std::vector<int64_t> dynamic_keys;
+      int64_t total_keys = 1000;
+      int64_t sieve = 5;
+      for (int64_t i = 1; i <= total_keys; i++) {
+        if (i % sieve == 0) {
+          perserved_keys.push_back(i);
+        } else {
+          dynamic_keys.push_back(i);
+        }
       }
-    }
-    InsertHelper(&tree, perserved_keys);
+      InsertHelper(&tree, perserved_keys);
 
-    size_t size;
+      size_t size;
 
-    auto insert_task = [&](int tid) { InsertHelper(&tree, dynamic_keys); };
-    auto delete_task = [&](int tid) { DeleteHelper(&tree, dynamic_keys); };
-    auto lookup_task = [&](int tid) { LookupHelper(&tree, perserved_keys); };
+      auto insert_task = [&](int tid) { InsertHelper(&tree, dynamic_keys); };
+      auto delete_task = [&](int tid) { DeleteHelper(&tree, dynamic_keys); };
+      auto lookup_task = [&](int tid) { LookupHelper(&tree, perserved_keys); };
 
-    std::vector<std::thread> threads;
-    std::vector<std::function<void(int)>> tasks;
-    tasks.emplace_back(insert_task);
-    tasks.emplace_back(delete_task);
-    tasks.emplace_back(lookup_task);
+      std::vector<std::thread> threads;
+      std::vector<std::function<void(int)>> tasks;
+      tasks.emplace_back(insert_task);
+      tasks.emplace_back(delete_task);
+      tasks.emplace_back(lookup_task);
 
-    size_t num_threads = 6;
-    for (size_t i = 0; i < num_threads; i++) {
-      threads.emplace_back(tasks[i % tasks.size()], i);
-    }
-    for (size_t i = 0; i < num_threads; i++) {
-      threads[i].join();
-    }
-
-    // Check all reserved keys exist
-    size = 0;
-
-    for (auto iter = tree.Begin(); iter != tree.End(); ++iter) {
-      const auto &pair = *iter;
-      if ((pair.first).ToString() % sieve == 0) {
-        size++;
+      size_t num_threads = 6;
+      for (size_t i = 0; i < num_threads; i++) {
+        threads.emplace_back(tasks[i % tasks.size()], i);
       }
-    }
+      for (size_t i = 0; i < num_threads; i++) {
+        threads[i].join();
+      }
 
-    ASSERT_EQ(size, perserved_keys.size());
+      // Check all reserved keys exist
+      size = 0;
+
+      for (auto iter = tree.Begin(); iter != tree.End(); ++iter) {
+        const auto &pair = *iter;
+        if ((pair.first).ToString() % sieve == 0) {
+          size++;
+        }
+      }
+
+      ASSERT_EQ(size, perserved_keys.size());
+    }
 
     delete disk_manager;
     delete bpm;
