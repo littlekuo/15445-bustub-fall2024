@@ -24,10 +24,13 @@ namespace bustub {
  */
 DeleteExecutor::DeleteExecutor(ExecutorContext *exec_ctx, const DeletePlanNode *plan,
                                std::unique_ptr<AbstractExecutor> &&child_executor)
-    : AbstractExecutor(exec_ctx) {}
+    : AbstractExecutor(exec_ctx), plan_(plan), child_executor_(std::move(child_executor)) {}
 
 /** Initialize the delete */
-void DeleteExecutor::Init() { throw NotImplementedException("DeleteExecutor is not implemented"); }
+void DeleteExecutor::Init() {
+  child_executor_->Init();
+  table_info_ = exec_ctx_->GetCatalog()->GetTable(plan_->GetTableOid()).get();
+}
 
 /**
  * Yield the number of rows deleted from the table.
@@ -38,6 +41,32 @@ void DeleteExecutor::Init() { throw NotImplementedException("DeleteExecutor is n
  * NOTE: DeleteExecutor::Next() does not use the `rid` out-parameter.
  * NOTE: DeleteExecutor::Next() returns true with the number of deleted rows produced only once.
  */
-auto DeleteExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool { return false; }
+auto DeleteExecutor::Next(Tuple *tuple, RID *rid) -> bool {
+  if (deleted_) {
+    return false;
+  }
+
+  int32_t count = 0;
+  std::vector<std::pair<Tuple, RID>> tuples;
+  auto indexes = exec_ctx_->GetCatalog()->GetTableIndexes(table_info_->name_);
+  // collect first
+  while (child_executor_->Next(tuple, rid)) {
+    tuples.emplace_back(std::make_pair(std::move(*tuple), *rid));
+    count++;
+  }
+  for (auto &[tuple, rid] : tuples) {
+    auto tuple_meta = table_info_->table_->GetTupleMeta(rid);
+    tuple_meta.is_deleted_ = true;
+    table_info_->table_->UpdateTupleMeta(tuple_meta, rid);
+    for (auto &index : indexes) {
+      index->index_->DeleteEntry(
+          tuple.KeyFromTuple(table_info_->schema_, index->key_schema_, index->index_->GetKeyAttrs()), rid,
+          exec_ctx_->GetTransaction());
+    }
+  }
+  *tuple = Tuple({Value(TypeId::INTEGER, count)}, &GetOutputSchema());
+  deleted_ = true;
+  return true;
+}
 
 }  // namespace bustub

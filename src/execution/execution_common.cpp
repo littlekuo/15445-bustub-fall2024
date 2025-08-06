@@ -23,7 +23,24 @@ namespace bustub {
 TupleComparator::TupleComparator(std::vector<OrderBy> order_bys) : order_bys_(std::move(order_bys)) {}
 
 /** TODO(P3): Implement the comparison method */
-auto TupleComparator::operator()(const SortEntry &entry_a, const SortEntry &entry_b) const -> bool { return false; }
+auto TupleComparator::operator()(const SortEntry &entry_a, const SortEntry &entry_b) const -> bool {
+  for (size_t i = 0; i < order_bys_.size(); i++) {
+    auto res = entry_a.first[i].CompareEquals(entry_b.first[i]);
+    if (res == CmpBool::CmpTrue) {
+      continue;
+    }
+    res = entry_a.first[i].CompareLessThan(entry_b.first[i]);
+    OrderByType order = order_bys_[i].first;
+    if (order == OrderByType::DEFAULT) {
+      order = OrderByType::ASC;
+    }
+    if (res == CmpBool::CmpTrue) {
+      return order == OrderByType::ASC;
+    }
+    return order == OrderByType::DESC;
+  }
+  return false;
+}
 
 /**
  * Generate sort key for a tuple based on the order by expressions.
@@ -31,7 +48,12 @@ auto TupleComparator::operator()(const SortEntry &entry_a, const SortEntry &entr
  * TODO(P3): Implement this method.
  */
 auto GenerateSortKey(const Tuple &tuple, const std::vector<OrderBy> &order_bys, const Schema &schema) -> SortKey {
-  return {};
+  SortKey key;
+  key.reserve(order_bys.size());
+  for (const auto &order_by : order_bys) {
+    key.emplace_back(order_by.second->Evaluate(&tuple, schema));
+  }
+  return key;
 }
 
 /**

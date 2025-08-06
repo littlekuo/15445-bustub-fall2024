@@ -37,6 +37,18 @@ class IndexIterator {
     it.bpm_ = nullptr;
   }
 
+  auto operator=(IndexIterator &&it) noexcept -> IndexIterator & {
+    if (this != &it) {
+      bpm_ = it.bpm_;
+      index_in_page_ = it.index_in_page_;
+      guard_ = std::move(it.guard_);
+
+      it.index_in_page_ = INVALID_INDEX;
+      it.bpm_ = nullptr;
+    }
+    return *this;
+  }
+
   IndexIterator();
 
   IndexIterator(BufferPoolManager *bpm, int index_in_page, ReadPageGuard guard);
