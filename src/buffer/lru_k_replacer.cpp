@@ -39,7 +39,18 @@ LRUKReplacer::LRUKReplacer(size_t num_frames, size_t k) : replacer_size_(num_fra
  *
  * @return true if a frame is evicted successfully, false if no frames can be evicted.
  */
-auto LRUKReplacer::Evict() -> std::optional<frame_id_t> { return std::nullopt; }
+auto LRUKReplacer::Evict() -> std::optional<frame_id_t> {
+  std::unique_lock<std::mutex> lock(latch_);
+  if (curr_size_ <= 0) {
+    return std::nullopt;
+  }
+  auto iter = evictable_node_set_.begin();
+  auto frame_id = (*iter)->GetFrameId();
+  curr_size_--;
+  node_store_.erase(frame_id);
+  evictable_node_set_.erase(iter);
+  return frame_id;
+}
 
 /**
  * TODO(P1): Add implementation
@@ -54,7 +65,26 @@ auto LRUKReplacer::Evict() -> std::optional<frame_id_t> { return std::nullopt; }
  * @param access_type type of access that was received. This parameter is only needed for
  * leaderboard tests.
  */
-void LRUKReplacer::RecordAccess(frame_id_t frame_id, [[maybe_unused]] AccessType access_type) {}
+void LRUKReplacer::RecordAccess(frame_id_t frame_id, [[maybe_unused]] AccessType access_type) {
+  if (static_cast<size_t>(frame_id) >= replacer_size_ || frame_id < 0) {
+    throw bustub::Exception("the frime id is invalid");
+  }
+  std::unique_lock<std::mutex> lock(latch_);
+  if (node_store_.find(frame_id) == node_store_.end()) {
+    LRUKNode node(k_, frame_id);
+    node.RecordAccess(current_timestamp_++);
+    node_store_[frame_id] = node;
+    return;
+  }
+  LRUKNode *node_ptr = &(node_store_[frame_id]);
+  if (node_ptr->IsEvictable()) {
+    evictable_node_set_.erase(node_ptr);
+    node_ptr->RecordAccess(current_timestamp_++);
+    evictable_node_set_.insert(node_ptr);
+  } else {
+    node_ptr->RecordAccess(current_timestamp_++);
+  }
+}
 
 /**
  * TODO(P1): Add implementation
@@ -73,7 +103,27 @@ void LRUKReplacer::RecordAccess(frame_id_t frame_id, [[maybe_unused]] AccessType
  * @param frame_id id of frame whose 'evictable' status will be modified
  * @param set_evictable whether the given frame is evictable or not
  */
-void LRUKReplacer::SetEvictable(frame_id_t frame_id, bool set_evictable) {}
+void LRUKReplacer::SetEvictable(frame_id_t frame_id, bool set_evictable) {
+  if (static_cast<size_t>(frame_id) >= replacer_size_ || frame_id < 0) {
+    throw bustub::Exception("the frime id is invalid");
+  }
+  std::unique_lock<std::mutex> lock(latch_);
+  if (node_store_.find(frame_id) == node_store_.end()) {
+    return;
+  }
+  auto node_ptr = &(node_store_[frame_id]);
+  bool origin_evictable = node_ptr->IsEvictable();
+  node_ptr->SetEvictable(set_evictable);
+  if (origin_evictable && !set_evictable) {
+    evictable_node_set_.erase(node_ptr);
+    curr_size_--;
+    return;
+  }
+  if (!origin_evictable && set_evictable) {
+    evictable_node_set_.insert(node_ptr);
+    curr_size_++;
+  }
+}
 
 /**
  * TODO(P1): Add implementation
@@ -92,7 +142,22 @@ void LRUKReplacer::SetEvictable(frame_id_t frame_id, bool set_evictable) {}
  *
  * @param frame_id id of frame to be removed
  */
-void LRUKReplacer::Remove(frame_id_t frame_id) {}
+void LRUKReplacer::Remove(frame_id_t frame_id) {
+  if (static_cast<size_t>(frame_id) >= replacer_size_ || frame_id < 0) {
+    throw bustub::Exception("the frime id is invalid");
+  }
+  std::unique_lock<std::mutex> lock(latch_);
+  if (node_store_.find(frame_id) == node_store_.end()) {
+    return;
+  }
+  auto node_ptr = &(node_store_[frame_id]);
+  if (!node_ptr->IsEvictable()) {
+    throw bustub::Exception("the frame is not evictable");
+  }
+  curr_size_--;
+  evictable_node_set_.erase(node_ptr);
+  node_store_.erase(frame_id);
+}
 
 /**
  * TODO(P1): Add implementation
@@ -101,6 +166,6 @@ void LRUKReplacer::Remove(frame_id_t frame_id) {}
  *
  * @return size_t
  */
-auto LRUKReplacer::Size() -> size_t { return 0; }
+auto LRUKReplacer::Size() -> size_t { return curr_size_; }
 
 }  // namespace bustub
