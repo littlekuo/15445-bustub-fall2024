@@ -16,7 +16,12 @@ namespace bustub {
 
 /** @brief Parameterized constructor. */
 template <typename KeyType>
-HyperLogLog<KeyType>::HyperLogLog(int16_t n_bits) : cardinality_(0) {}
+HyperLogLog<KeyType>::HyperLogLog(int16_t n_bits) : cardinality_(0) {
+  if (n_bits >= 0) {
+    n_bits_ = n_bits;
+    registers_.resize(1 << n_bits, 0);
+  }
+}
 
 /**
  * @brief Function that computes binary.
@@ -26,8 +31,8 @@ HyperLogLog<KeyType>::HyperLogLog(int16_t n_bits) : cardinality_(0) {}
  */
 template <typename KeyType>
 auto HyperLogLog<KeyType>::ComputeBinary(const hash_t &hash) const -> std::bitset<BITSET_CAPACITY> {
-  /** @TODO(student) Implement this function! */
-  return {0};
+  std::bitset<BITSET_CAPACITY> bs(hash);
+  return bs;
 }
 
 /**
@@ -38,8 +43,14 @@ auto HyperLogLog<KeyType>::ComputeBinary(const hash_t &hash) const -> std::bitse
  */
 template <typename KeyType>
 auto HyperLogLog<KeyType>::PositionOfLeftmostOne(const std::bitset<BITSET_CAPACITY> &bset) const -> uint64_t {
-  /** @TODO(student) Implement this function! */
-  return 0;
+  size_t position = BITSET_CAPACITY;
+  for (int i = bset.size() - 1; i >= 0; --i) {
+    if (bset[i]) {
+      position = (bset.size() - 1 - i);
+      break;
+    }
+  }
+  return position;
 }
 
 /**
@@ -49,7 +60,15 @@ auto HyperLogLog<KeyType>::PositionOfLeftmostOne(const std::bitset<BITSET_CAPACI
  */
 template <typename KeyType>
 auto HyperLogLog<KeyType>::AddElem(KeyType val) -> void {
-  /** @TODO(student) Implement this function! */
+  const hash_t hash_val = CalculateHash(val);
+  std::bitset<BITSET_CAPACITY> bs = ComputeBinary(hash_val);
+  size_t bucket_index = (bs >> (BITSET_CAPACITY - n_bits_)).to_ulong();
+  int16_t leading_zeros = PositionOfLeftmostOne(bs << n_bits_);
+  if (leading_zeros == BITSET_CAPACITY) {
+    std::cout << "bs:" << (bs << n_bits_) << " leading_zeros:" << leading_zeros << std::endl;
+  }
+  int16_t target_val = leading_zeros != BITSET_CAPACITY ? leading_zeros + 1 : (BITSET_CAPACITY - n_bits_) + 1;
+  registers_[bucket_index] = std::max(registers_[bucket_index], target_val);
 }
 
 /**
@@ -57,7 +76,15 @@ auto HyperLogLog<KeyType>::AddElem(KeyType val) -> void {
  */
 template <typename KeyType>
 auto HyperLogLog<KeyType>::ComputeCardinality() -> void {
-  /** @TODO(student) Implement this function! */
+  int m = registers_.size();
+  if (m == 0) {
+    return;
+  }
+  double sum = 0.0;
+  for (int i = 0; i < m; ++i) {
+    sum += std::pow(2, -registers_[i]);
+  }
+  cardinality_ = std::floor((m * m * CONSTANT) / sum);
 }
 
 template class HyperLogLog<int64_t>;
