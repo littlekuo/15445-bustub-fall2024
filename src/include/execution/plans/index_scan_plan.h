@@ -19,9 +19,19 @@
 #include "catalog/catalog.h"
 #include "concurrency/transaction.h"
 #include "execution/expressions/abstract_expression.h"
+#include "execution/expressions/comparison_expression.h"
 #include "execution/plans/abstract_plan.h"
+#include "type/value.h"
 
 namespace bustub {
+
+struct IndexCondition {
+  // Equal, GreaterThan, GreaterThanOrEqual
+  ComparisonType type_;
+  AbstractExpressionRef column_;
+  AbstractExpressionRef constant_value_;
+};
+
 /**
  * IndexScanPlanNode identifies a table that should be scanned with an optional predicate.
  */
@@ -35,12 +45,17 @@ class IndexScanPlanNode : public AbstractPlanNode {
    * @param pred_key The key for point lookup
    */
   IndexScanPlanNode(SchemaRef output, table_oid_t table_oid, index_oid_t index_oid,
-                    AbstractExpressionRef filter_predicate = nullptr, std::vector<AbstractExpressionRef> pred_keys = {})
+                    AbstractExpressionRef filter_predicate = nullptr,
+                    std::vector<std::vector<AbstractExpressionRef>> point_lookup_keys = {},
+                    std::vector<IndexCondition> range_lookup_conds = {},
+                    std::vector<AbstractExpressionRef> remaining_conditions = {})
       : AbstractPlanNode(std::move(output), {}),
         table_oid_(table_oid),
         index_oid_(index_oid),
         filter_predicate_(std::move(filter_predicate)),
-        pred_keys_(std::move(pred_keys)) {}
+        point_lookup_keys_(std::move(point_lookup_keys)),
+        range_lookup_conds_(std::move(range_lookup_conds)),
+        remaining_conds_(std::move(remaining_conditions)) {}
 
   auto GetType() const -> PlanType override { return PlanType::IndexScan; }
 
@@ -64,15 +79,41 @@ class IndexScanPlanNode : public AbstractPlanNode {
   /**
    * The constant value keys to lookup.
    * For example when dealing "WHERE v = 1" we could store the constant value 1 here
+   * support index on multiple columns
    */
-  std::vector<AbstractExpressionRef> pred_keys_;
+  std::vector<std::vector<AbstractExpressionRef>> point_lookup_keys_;
 
   // Add anything you want here for index lookup
+  std::vector<IndexCondition> range_lookup_conds_;
+  std::vector<AbstractExpressionRef> remaining_conds_;
 
  protected:
   auto PlanNodeToString() const -> std::string override {
     if (filter_predicate_) {
-      return fmt::format("IndexScan {{ index_oid={}, filter={} }}", index_oid_, filter_predicate_);
+      std::string ss;
+      ss += fmt::format("point_lookup_keys: [");
+      for (const auto &key : point_lookup_keys_) {
+        ss += "(";
+        for (const auto &expr : key) {
+          ss += expr->ToString() + "";
+        }
+        ss += ") ";
+      }
+      ss += "]\n";
+
+      ss += "range_lookup_conds: [";
+      for (const auto &cond : range_lookup_conds_) {
+        ss += fmt::format("({} {} {})", cond.column_->ToString(), cond.type_, cond.constant_value_->ToString()) + " ";
+      }
+      ss += "]\n";
+
+      ss += "remaining_conds: [";
+      for (const auto &cond : remaining_conds_) {
+        ss += cond->ToString() + " ";
+      }
+      ss += "]\n";
+
+      return fmt::format("IndexScan {{ index_oid={}, filter={}, others={{{}}} }}", index_oid_, filter_predicate_, ss);
     }
     return fmt::format("IndexScan {{ index_oid={} }}", index_oid_);
   }
