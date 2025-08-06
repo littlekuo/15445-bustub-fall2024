@@ -317,7 +317,7 @@ void LRUKReplacer::ConsumerLoop(const std::unique_ptr<rigtorp::MPMCQueue<std::op
   while (true) {
     bool ret = chan->TryPop(cmd_opt);
     if (!ret) {
-      //std::cout << "consumer sleep: " << current_sleep_duration.count() << std::endl;
+      // std::cout << "consumer sleep: " << current_sleep_duration.count() << std::endl;
       std::this_thread::sleep_for(current_sleep_duration);
       current_sleep_duration = std::min(current_sleep_duration * 2, MAX_DURATION);
       continue;

@@ -72,7 +72,6 @@ auto Optimizer::OptimizeNLJAsIndexJoin(const AbstractPlanNodeRef &plan) -> Abstr
             auto right_expr_tuple_0 =
                 std::make_shared<ColumnValueExpression>(0, right_expr->GetColIdx(), right_expr->GetReturnType());
             // Now it's in form of <column_expr> = <column_expr>. Let's match an index for them.
-
             // Ensure right child is table scan
             if (nlj_plan.GetRightPlan()->GetType() == PlanType::SeqScan) {
               const auto &right_seq_scan = dynamic_cast<const SeqScanPlanNode &>(*nlj_plan.GetRightPlan());

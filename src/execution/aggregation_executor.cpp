@@ -25,10 +25,29 @@ namespace bustub {
  */
 AggregationExecutor::AggregationExecutor(ExecutorContext *exec_ctx, const AggregationPlanNode *plan,
                                          std::unique_ptr<AbstractExecutor> &&child_executor)
-    : AbstractExecutor(exec_ctx) {}
+    : AbstractExecutor(exec_ctx),
+      plan_(plan),
+      child_executor_(std::move(child_executor)),
+      aht_(plan->GetAggregates(), plan->GetAggregateTypes()),
+      aht_iterator_(aht_.Begin()) {}
 
 /** Initialize the aggregation */
-void AggregationExecutor::Init() {}
+void AggregationExecutor::Init() {
+  child_executor_->Init();
+  aht_.Clear();
+  Tuple tuple;
+  RID rid;
+  // iterate through child executor
+  bool is_empty = true;
+  while (child_executor_->Next(&tuple, &rid)) {
+    is_empty = false;
+    aht_.InsertCombine(MakeAggregateKey(&tuple), MakeAggregateValue(&tuple));
+  }
+  if (is_empty && plan_->GetGroupBys().empty()) {
+    aht_.InsertCombine(AggregateKey({}), AggregateValue({}));
+  }
+  aht_iterator_ = aht_.Begin();
+}
 
 /**
  * Yield the next tuple from the insert.
@@ -36,7 +55,21 @@ void AggregationExecutor::Init() {}
  * @param[out] rid The next tuple RID produced by the aggregation
  * @return `true` if a tuple was produced, `false` if there are no more tuples
  */
-auto AggregationExecutor::Next(Tuple *tuple, RID *rid) -> bool { return false; }
+auto AggregationExecutor::Next(Tuple *tuple, RID *rid) -> bool {
+  if (aht_iterator_ == aht_.End()) {
+    return false;
+  }
+  std::vector<Value> vals;
+  for (auto &key : aht_iterator_.Key().group_bys_) {
+    vals.push_back(key);
+  }
+  for (auto &val : aht_iterator_.Val().aggregates_) {
+    vals.push_back(val);
+  }
+  *tuple = Tuple(vals, &plan_->OutputSchema());
+  ++aht_iterator_;
+  return true;
+}
 
 /** Do not use or remove this function, otherwise you will get zero points. */
 auto AggregationExecutor::GetChildExecutor() const -> const AbstractExecutor * { return child_executor_.get(); }

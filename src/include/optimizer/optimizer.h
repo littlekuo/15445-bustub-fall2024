@@ -26,6 +26,16 @@
 
 namespace bustub {
 
+auto IsPredicateFalse(const AbstractExpressionRef &expr) -> bool;
+
+void RemoveDuplicate(std::vector<uint64_t> &packed);
+
+auto PackTupleAndColumnIdx(uint32_t tuple_idx, uint32_t col_idx) -> uint64_t;
+
+auto UnpackTupleAndColumnIdx(uint64_t packed) -> std::pair<uint32_t, uint32_t>;
+
+auto ConstructUpdatedColIdxMap(std::vector<uint64_t> &packed) -> std::unordered_map<uint64_t, uint64_t>;
+
 /**
  * The optimizer takes an `AbstractPlanNode` and outputs an optimized `AbstractPlanNode`.
  */
@@ -68,6 +78,23 @@ class Optimizer {
   auto OptimizeSortLimitAsTopN(const AbstractPlanNodeRef &plan) -> AbstractPlanNodeRef;
 
   auto EstimatedCardinality(const std::string &table_name) -> std::optional<size_t>;
+
+  auto OptimizeDistributeNLJPredicates(const AbstractPlanNodeRef &plan, std::vector<AbstractExpressionRef> &from_top)
+      -> AbstractPlanNodeRef;
+
+  auto CombinePredicates(const std::vector<AbstractExpressionRef> &predicates) -> AbstractExpressionRef;
+
+  auto OptimizeColumnPruning(const AbstractPlanNodeRef &plan, const std::vector<uint32_t> &required_columns)
+      -> AbstractPlanNodeRef;
+
+  void ExtractOldColumns(const AbstractExpressionRef &expr, std::vector<uint64_t> &old_columns);
+
+  auto RewriteExpressionForColumnOrder(const AbstractExpressionRef &expr,
+                                       const std::unordered_map<uint64_t, uint64_t> &col_idx_map,
+                                       bool need_assert = true) -> AbstractExpressionRef;
+  auto ConstantFolding(const AbstractExpressionRef &expr) -> AbstractExpressionRef;
+
+  auto OptimizeConstantFolding(const AbstractPlanNodeRef &plan) -> AbstractPlanNodeRef;
 
   /** Catalog will be used during the planning process. USERS SHOULD ENSURE IT OUTLIVES
    * OPTIMIZER, otherwise it's a dangling reference.

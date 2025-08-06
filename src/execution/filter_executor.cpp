@@ -12,6 +12,7 @@
 
 #include "execution/executors/filter_executor.h"
 #include "common/exception.h"
+#include "optimizer/optimizer.h"
 #include "type/value_factory.h"
 
 namespace bustub {
@@ -40,6 +41,10 @@ void FilterExecutor::Init() {
  */
 auto FilterExecutor::Next(Tuple *tuple, RID *rid) -> bool {
   auto filter_expr = plan_->GetPredicate();
+
+  if (IsPredicateFalse(plan_->GetPredicate())) {
+    return false;
+  }
 
   while (true) {
     // Get the next tuple
