@@ -57,6 +57,10 @@ class BPlusTreePage {
   auto GetMaxSize() const -> int;
   void SetMaxSize(int max_size);
   auto GetMinSize() const -> int;
+  auto IsFull() const -> bool;
+  auto IsEmpty() const -> bool { return size_ == 0; }
+  auto IsUnderflow() const -> bool { return size_ < GetMinSize(); }
+  auto IsAboveMinThreshold() const -> bool { return size_ > GetMinSize(); }
 
  private:
   // Member variables, attributes that both internal and leaf page share

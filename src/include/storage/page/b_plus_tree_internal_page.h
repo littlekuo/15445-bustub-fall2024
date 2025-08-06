@@ -14,13 +14,15 @@
 
 #include <queue>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "storage/page/b_plus_tree_page.h"
 
 namespace bustub {
 
 #define B_PLUS_TREE_INTERNAL_PAGE_TYPE BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>
-#define INTERNAL_PAGE_HEADER_SIZE 12
+#define INTERNAL_PAGE_HEADER_SIZE 16
 #define INTERNAL_PAGE_SLOT_CNT \
   ((BUSTUB_PAGE_SIZE - INTERNAL_PAGE_HEADER_SIZE) / ((int)(sizeof(KeyType) + sizeof(ValueType))))  // NOLINT
 
@@ -55,6 +57,8 @@ class BPlusTreeInternalPage : public BPlusTreePage {
   auto KeyAt(int index) const -> KeyType;
 
   void SetKeyAt(int index, const KeyType &key);
+  void SetValueAt(int index, const ValueType &value);
+  void RemoveAt(int index);
 
   /**
    * @param value The value to search for
@@ -63,6 +67,13 @@ class BPlusTreeInternalPage : public BPlusTreePage {
   auto ValueIndex(const ValueType &value) const -> int;
 
   auto ValueAt(int index) const -> ValueType;
+
+  auto GetPageId() const -> page_id_t;
+  void SetPageId(page_id_t page_id);
+  auto PageIndexByKey(const KeyType &key, const KeyComparator &comparator) const -> int;
+
+  auto Insert(const KeyType &key, const ValueType &value, const KeyComparator &comparator,
+              std::vector<std::pair<KeyType, ValueType>> &redistributions) -> bool;
 
   /**
    * @brief For test only, return a string representing all keys in
@@ -95,6 +106,7 @@ class BPlusTreeInternalPage : public BPlusTreePage {
   KeyType key_array_[INTERNAL_PAGE_SLOT_CNT];
   ValueType page_id_array_[INTERNAL_PAGE_SLOT_CNT];
   // (Fall 2024) Feel free to add more fields and helper functions below if needed
+  page_id_t page_id_;
 };
 
 }  // namespace bustub
