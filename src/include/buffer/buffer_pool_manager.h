@@ -69,24 +69,11 @@ class FrameHeader {
   auto GetDataMut() -> char *;
   void Reset();
 
-  /** @brief The frame ID / index of the frame this header represents. */
-  const frame_id_t frame_id_;
-
-  /** @brief The readers / writer latch for this frame. */
-  std::shared_mutex rwlatch_;
-
   /** @brief The number of pins on this frame keeping the page in memory. */
-  std::atomic<size_t> pin_count_;
-
-  /** @brief The dirty flag. */
-  bool is_dirty_;
-
-  /**
-   * @brief A pointer to the data of the page that this frame holds.
-   *
-   * If the frame does not hold any page data, the frame contains all null bytes.
-   */
-  std::vector<char> data_;
+  alignas(64) std::atomic<size_t> pin_count_;
+  /** @brief The readers / writer latch for this frame. */
+  alignas(64) std::shared_mutex rwlatch_;
+  alignas(64) std::mutex m_;
 
   /**
    * TODO(P1): You may add any fields or helper functions under here that you think are necessary.
@@ -96,10 +83,21 @@ class FrameHeader {
    * else in the buffer pool manager...
    */
   page_id_t page_id_;
-
+  /** @brief The dirty flag. */
+  bool is_dirty_;
   bool io_done_{false};
+
+  /** @brief The frame ID / index of the frame this header represents. */
+  const frame_id_t frame_id_;
+
+  /**
+   * @brief A pointer to the data of the page that this frame holds.
+   *
+   * If the frame does not hold any page data, the frame contains all null bytes.
+   */
+  std::vector<char> data_;
+
   std::condition_variable cv_;
-  std::mutex m_;
 };
 
 /**

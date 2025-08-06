@@ -22,10 +22,21 @@ namespace bustub {
 
 #define INDEXITERATOR_TYPE IndexIterator<KeyType, ValueType, KeyComparator>
 
+constexpr int INVALID_INDEX = -1;
+
 INDEX_TEMPLATE_ARGUMENTS
 class IndexIterator {
  public:
   // you may define your own constructor based on your member variables
+  IndexIterator(IndexIterator &&it) noexcept {
+    bpm_ = it.bpm_;
+    index_in_page_ = it.index_in_page_;
+    guard_ = std::move(it.guard_);
+
+    it.index_in_page_ = INVALID_INDEX;
+    it.bpm_ = nullptr;
+  }
+
   IndexIterator();
 
   IndexIterator(BufferPoolManager *bpm, int index_in_page, ReadPageGuard guard);
@@ -39,10 +50,10 @@ class IndexIterator {
   auto operator++() -> IndexIterator &;
 
   auto operator==(const IndexIterator &itr) const -> bool {
-    if (index_in_page_ == -1 && itr.index_in_page_ == -1) {
+    if (index_in_page_ == INVALID_INDEX && itr.index_in_page_ == INVALID_INDEX) {
       return true;
     }
-    if (index_in_page_ == -1 || itr.index_in_page_ == -1) {
+    if (index_in_page_ == INVALID_INDEX || itr.index_in_page_ == INVALID_INDEX) {
       return false;
     }
     return index_in_page_ == itr.index_in_page_ && guard_.GetPageId() == itr.guard_.GetPageId();
@@ -50,9 +61,13 @@ class IndexIterator {
 
   auto operator!=(const IndexIterator &itr) const -> bool { return !(*this == itr); }
 
+  auto IsDeleted() -> bool;
+
+  void Advance();
+
  private:
   BufferPoolManager *bpm_;
-  int index_in_page_{-1};
+  int index_in_page_{INVALID_INDEX};
   ReadPageGuard guard_;
 };
 

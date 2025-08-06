@@ -23,6 +23,7 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <deque>
 #include <filesystem>
 #include <iostream>
@@ -30,6 +31,7 @@
 #include <queue>
 #include <shared_mutex>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -46,7 +48,7 @@ namespace bustub {
 
 struct PrintableBPlusTree;
 
-enum class OperationType { kRead, kInsert, kRemove };
+enum class OperationType { kInsert, kRemove, kHandleUnderflow };
 
 /**
  * @brief Definition of the Context class.
@@ -60,8 +62,9 @@ class Context {
  public:
   // When you insert into / remove from the B+ tree, store the write guard of header page here.
   // Remember to drop the header page guard and set it to nullopt when you want to unlock all.
-  std::optional<WritePageGuard> header_page_{std::nullopt};
+  // std::optional<WritePageGuard> header_page_{std::nullopt};
 
+  std::optional<std::lock_guard<std::shared_mutex>> header_page_lock_;
   // Save the root page id here so that it's easier to know if the current page is the root page.
   page_id_t root_page_id_{INVALID_PAGE_ID};
 
@@ -74,9 +77,8 @@ class Context {
   auto IsRootPage(page_id_t page_id) -> bool { return page_id == root_page_id_; }
 
   auto DropHeaderAndWrites() -> void {
-    if (header_page_.has_value()) {
-      header_page_.value().Drop();
-      header_page_ = std::nullopt;
+    if (header_page_lock_.has_value()) {
+      header_page_lock_.reset();
     }
     for (auto &write_guard : write_set_) {
       write_guard.Drop();
@@ -88,9 +90,8 @@ class Context {
     if (!is_valid_) {
       return;
     }
-    if (header_page_.has_value()) {
-      header_page_.value().Drop();
-      header_page_ = std::nullopt;
+    if (header_page_lock_.has_value()) {
+      header_page_lock_.reset();
     }
     for (auto &write_guard : write_set_) {
       write_guard.Drop();
@@ -106,6 +107,43 @@ class Context {
   ~Context() { Drop(); }
 };
 
+template <class KeyType, class ValueType>
+class ProcessingSet {
+ public:
+  ProcessingSet() = default;
+  ~ProcessingSet() = default;
+
+  void Put(const std::pair<KeyType, ValueType> &element) {
+    std::unique_lock<std::mutex> lk(m_);
+    q_[element.first] = element.second;
+  }
+
+  auto Get() -> std::optional<std::pair<KeyType, ValueType>> {
+    std::unique_lock<std::mutex> lk(m_);
+    if (q_.empty()) {
+      return std::nullopt;
+    }
+    std::pair<KeyType, ValueType> element{q_.begin()->first, q_.begin()->second};
+    q_.erase(q_.begin());
+    return element;
+  }
+
+  auto GetAll(std::vector<std::pair<KeyType, ValueType>> &result) -> void {
+    std::unique_lock<std::mutex> lk(m_);
+    if (q_.empty()) {
+      return;
+    }
+    for (auto it = q_.begin(); it != q_.end(); ++it) {
+      result.emplace_back(it->first, it->second);
+    }
+    q_.clear();
+  }
+
+ private:
+  std::mutex m_;
+  std::unordered_map<KeyType, ValueType> q_;
+};
+
 #define BPLUSTREE_TYPE BPlusTree<KeyType, ValueType, KeyComparator>
 
 // Main class providing the API for the Interactive B+ Tree.
@@ -118,6 +156,8 @@ class BPlusTree {
   explicit BPlusTree(std::string name, page_id_t header_page_id, BufferPoolManager *buffer_pool_manager,
                      const KeyComparator &comparator, int leaf_max_size = LEAF_PAGE_SLOT_CNT,
                      int internal_max_size = INTERNAL_PAGE_SLOT_CNT);
+
+  ~BPlusTree();
 
   // Returns true if this B+ tree has no keys and values.
   auto IsEmpty() const -> bool;
@@ -163,85 +203,184 @@ class BPlusTree {
   auto ToPrintableBPlusTree(page_id_t root_id) -> PrintableBPlusTree;
 
   auto FindLeftmostLeafPage() -> std::optional<ReadPageGuard> {
-    auto cur_guard = bpm_->ReadPage(header_page_id_);
-    page_id_t cur_page_id = cur_guard.As<BPlusTreeHeaderPage>()->root_page_id_;
-    if (cur_page_id == INVALID_PAGE_ID) {
+    header_mtx_.lock_shared();
+    if (root_page_id_ == INVALID_PAGE_ID) {
+      header_mtx_.unlock_shared();
       return std::nullopt;
     }
+    ReadPageGuard cur_guard = bpm_->ReadPage(root_page_id_);
+    header_mtx_.unlock_shared();
     while (true) {
-      cur_guard = bpm_->ReadPage(cur_page_id);
       auto page = cur_guard.As<BPlusTreePage>();
       if (page->IsLeafPage()) {
         break;
       }
       auto internal_page = cur_guard.As<InternalPage>();
-      cur_page_id = internal_page->ValueAt(0);
+      auto cur_page_id = internal_page->ValueAt(0);
+      cur_guard = bpm_->ReadPage(cur_page_id);
     }
     return cur_guard;
   }
 
-  auto FindLeafPage(const KeyType &key, Context *ctx, OperationType op)
-      -> std::variant<std::monostate, WritePageGuard, ReadPageGuard> {
-    if (op == OperationType::kRead) {
-      auto guard = bpm_->ReadPage(header_page_id_);
-      auto header_page = guard.As<BPlusTreeHeaderPage>();
-      if (header_page->root_page_id_ == INVALID_PAGE_ID) {
-        return std::monostate{};
+  auto FindLeafPageOptimistic(const KeyType &key, Context *ctx) -> std::optional<ReadPageGuard> {
+    header_mtx_.lock_shared();
+    if (root_page_id_ == INVALID_PAGE_ID) {
+      header_mtx_.unlock_shared();
+      return std::nullopt;
+    }
+    ReadPageGuard guard = bpm_->ReadPage(root_page_id_);
+    header_mtx_.unlock_shared();
+    auto page = guard.As<BPlusTreePage>();
+    while (!page->IsLeafPage()) {
+      auto internal_page = guard.As<InternalPage>();
+      auto idx = internal_page->PageIndexByKey(key, comparator_);
+      auto child_page_id = internal_page->ValueAt(idx);
+      guard = bpm_->ReadPage(child_page_id);
+      page = guard.As<BPlusTreePage>();
+    }
+    return guard;
+  }
+
+  auto FindLeafPagePessimistic(const KeyType &key, Context *ctx, OperationType op) -> std::optional<WritePageGuard> {
+    if (op == OperationType::kRemove) {
+      header_mtx_.lock_shared();
+      if (root_page_id_ == INVALID_PAGE_ID) {
+        header_mtx_.unlock_shared();
+        return std::nullopt;
       }
-      ctx->root_page_id_ = header_page->root_page_id_;
-      guard = bpm_->ReadPage(ctx->root_page_id_);
+      WritePageGuard guard = bpm_->WritePage(root_page_id_);
+      header_mtx_.unlock_shared();
       auto page = guard.As<BPlusTreePage>();
       while (!page->IsLeafPage()) {
         auto internal_page = guard.As<InternalPage>();
         auto idx = internal_page->PageIndexByKey(key, comparator_);
         auto child_page_id = internal_page->ValueAt(idx);
-        guard = bpm_->ReadPage(child_page_id);
+        guard = bpm_->WritePage(child_page_id);
         page = guard.As<BPlusTreePage>();
       }
       return guard;
     }
 
-    WritePageGuard guard = bpm_->WritePage(header_page_id_);
-    ctx->header_page_ = std::move(guard);
-    auto header_page = ctx->header_page_->AsMut<BPlusTreeHeaderPage>();
-    ctx->root_page_id_ = header_page->root_page_id_;
-    if (header_page->root_page_id_ == INVALID_PAGE_ID) {
-      if (op == OperationType::kRemove) {
+    // consider overflow or underflow
+    ctx->header_page_lock_.emplace(header_mtx_);
+    ctx->root_page_id_ = root_page_id_;
+    if (root_page_id_ == INVALID_PAGE_ID) {
+      if (op == OperationType::kHandleUnderflow) {
         ctx->Drop();
-        return std::monostate{};
+        return std::nullopt;
       }
       auto new_root_page_id = bpm_->NewPage();
       WritePageGuard new_guard = bpm_->WritePage(new_root_page_id);
-      header_page->root_page_id_ = new_root_page_id;
+      WritePageGuard header_guard = bpm_->WritePage(header_page_id_);
+      header_guard.AsMut<BPlusTreeHeaderPage>()->root_page_id_ = new_root_page_id;
+      root_page_id_ = new_root_page_id;
       ctx->root_page_id_ = new_root_page_id;
-      ctx->Drop();
+      leaf_cnt_.fetch_add(1, std::memory_order_relaxed);
       auto new_page = new_guard.AsMut<LeafPage>();
       new_page->Init(leaf_max_size_);
       new_page->SetPageId(new_root_page_id);
       return new_guard;
     }
     WritePageGuard cur_guard = bpm_->WritePage(ctx->root_page_id_);
-    auto page_full = cur_guard.AsMut<BPlusTreePage>()->IsFull();
-    auto page_above_min = cur_guard.AsMut<BPlusTreePage>()->IsAboveMinThreshold();
-    if ((op == OperationType::kInsert && !page_full) || (op == OperationType::kRemove && page_above_min)) {
+    auto page = cur_guard.AsMut<BPlusTreePage>();
+    auto page_overflow = IsOverflow(cur_guard.GetDataMut(), page->IsLeafPage());
+    auto page_above_min = IsAboveMinThreshold(cur_guard.GetDataMut(), page->IsLeafPage());
+    if ((op == OperationType::kInsert && !page_overflow) || (op == OperationType::kHandleUnderflow && page_above_min)) {
       ctx->DropHeaderAndWrites();
     }
-    auto page = cur_guard.AsMut<BPlusTreePage>();
     while (!page->IsLeafPage()) {
       auto internal_page = cur_guard.AsMut<InternalPage>();
       auto idx = internal_page->PageIndexByKey(key, comparator_);
       auto child_page_id = internal_page->ValueAt(idx);
       ctx->write_set_.push_back(std::move(cur_guard));
       cur_guard = bpm_->WritePage(child_page_id);
-      page_full = cur_guard.AsMut<BPlusTreePage>()->IsFull();
-      page_above_min = cur_guard.AsMut<BPlusTreePage>()->IsAboveMinThreshold();
-      if ((op == OperationType::kInsert && !page_full) || (op == OperationType::kRemove && page_above_min)) {
+      page = cur_guard.AsMut<BPlusTreePage>();
+      page_overflow = IsOverflow(cur_guard.GetDataMut(), page->IsLeafPage());
+      page_above_min = IsAboveMinThreshold(cur_guard.GetDataMut(), page->IsLeafPage());
+      if ((op == OperationType::kInsert && !page_overflow) ||
+          (op == OperationType::kHandleUnderflow && page_above_min)) {
         ctx->DropHeaderAndWrites();
       }
-      page = cur_guard.AsMut<BPlusTreePage>();
     }
     return cur_guard;
   }
+
+  auto FindLeafPageOptimisticInsert(const KeyType &key, Context *ctx)
+      -> std::variant<std::monostate, WritePageGuard, ReadPageGuard> {
+    header_mtx_.lock_shared();
+    if (root_page_id_ == INVALID_PAGE_ID) {
+      header_mtx_.unlock_shared();
+      return std::monostate{};
+    }
+    ReadPageGuard guard = bpm_->ReadPage(root_page_id_);
+    header_mtx_.unlock_shared();
+    auto page = guard.As<BPlusTreePage>();
+    if (page->IsLeafPage()) {
+      return guard;
+    }
+    while (true) {
+      auto internal_page = guard.As<InternalPage>();
+      auto page_id = internal_page->GetPageId();
+      auto version = internal_page->GetVersion();
+      auto idx = internal_page->PageIndexByKey(key, comparator_);
+      auto child_page_id = internal_page->ValueAt(idx);
+      ReadPageGuard child_guard = bpm_->ReadPage(child_page_id);
+      auto child_page = child_guard.As<BPlusTreePage>();
+      if (!child_page->IsLeafPage()) {
+        guard = std::move(child_guard);
+      } else if (!child_guard.As<LeafPage>()->IsFull()) {
+        guard = std::move(child_guard);
+        break;
+      } else if (internal_page->PessimisticFirst()) {
+        return std::monostate{};
+      } else {
+        // std::cout << "optimistic split" << std::endl;
+        // internal page is not full and leaf page is full
+        child_guard.Drop();
+        guard.Drop();
+        WritePageGuard cur_guard = bpm_->WritePage(page_id);
+        internal_page = cur_guard.AsMut<InternalPage>();
+        if (internal_page->IsFull() || internal_page->GetVersion() != version) {
+          // version changed or full, retry by pessimistic
+          cur_guard.Drop();
+          return std::monostate{};
+        }
+        idx = internal_page->PageIndexByKey(key, comparator_);
+        child_page_id = internal_page->ValueAt(idx);
+        WritePageGuard child_write_guard = bpm_->WritePage(child_page_id);
+        if (!child_write_guard.As<LeafPage>()->IsFull()) {
+          cur_guard.Drop();
+          return child_write_guard;
+        }
+        ctx->write_set_.push_back(std::move(cur_guard));
+        return child_write_guard;
+      }
+    }
+    return guard;
+  }
+
+  auto IsAboveMinThreshold(const char *data, bool is_leaf) -> bool {
+    if (is_leaf) {
+      return reinterpret_cast<const LeafPage *>(data)->IsAboveMinThreshold();
+    }
+    return reinterpret_cast<const InternalPage *>(data)->IsAboveMinThreshold();
+  }
+
+  auto IsUnderflow(const char *data, bool is_leaf) -> bool {
+    if (is_leaf) {
+      return reinterpret_cast<const LeafPage *>(data)->IsUnderflow();
+    }
+    return reinterpret_cast<const InternalPage *>(data)->IsUnderflow();
+  }
+
+  auto IsOverflow(const char *data, bool is_leaf) -> bool {
+    if (is_leaf) {
+      return reinterpret_cast<const LeafPage *>(data)->IsOverflow();
+    }
+    return reinterpret_cast<const InternalPage *>(data)->IsOverflow();
+  }
+
+  void AddUnderflowPage(page_id_t page_id, KeyType key) { underflow_pages_.Put(std::make_pair(page_id, key)); }
 
   auto SplitLeafPage(WritePageGuard &old_page, Context *ctx,
                      std::vector<std::pair<KeyType, ValueType>> &redistributions) -> page_id_t;
@@ -253,14 +392,29 @@ class BPlusTree {
 
   auto MergeOrRedistributeInternalPage(WritePageGuard *page_guard, Context *ctx) -> page_id_t;
 
+  void HandleUnderflowPage(page_id_t target_page_id, KeyType &key);
+
   // member variable
-  std::string index_name_;
+  alignas(64) std::atomic<size_t> logical_size_{0};
+  std::thread worker_thread_;
+  std::chrono::milliseconds interval_{5000};
   BufferPoolManager *bpm_;
   KeyComparator comparator_;
   std::vector<std::string> log;  // NOLINT
+  alignas(64) std::atomic<size_t> active_pessimistic_cnt_{0};
+  std::string index_name_;
+  std::condition_variable cv_;
+  ProcessingSet<page_id_t, KeyType> underflow_pages_;
+  page_id_t root_page_id_;
   int leaf_max_size_;
+  alignas(64) std::atomic<size_t> pessimistic_cnt_{0};
   int internal_max_size_;
   page_id_t header_page_id_;
+  std::atomic<bool> stop_flag_{false};
+  alignas(64) std::atomic<size_t> leaf_cnt_{0};
+  alignas(64) std::shared_mutex header_mtx_;  // protect header_page_(root_page_id_)
+
+  alignas(64) std::mutex mtx_;
 };
 
 /**

@@ -34,34 +34,60 @@ INDEX_TEMPLATE_ARGUMENTS
 INDEXITERATOR_TYPE::~IndexIterator() = default;  // NOLINT
 
 INDEX_TEMPLATE_ARGUMENTS
-auto INDEXITERATOR_TYPE::IsEnd() -> bool {
-  if (index_in_page_ == -1) {
-    return true;
-  }
-  auto page = guard_.As<BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>>();
-  return index_in_page_ < page->GetSize();
-}
+auto INDEXITERATOR_TYPE::IsEnd() -> bool { return index_in_page_ == INVALID_INDEX; }
 
 INDEX_TEMPLATE_ARGUMENTS
 auto INDEXITERATOR_TYPE::operator*() -> std::pair<const KeyType &, const ValueType &> {
   auto page = guard_.As<BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>>();
-  return {page->KeyAt(index_in_page_), page->ValueAt(index_in_page_)};
+  return {page->Key(index_in_page_), page->Value(index_in_page_)};
 }
 
 INDEX_TEMPLATE_ARGUMENTS
 auto INDEXITERATOR_TYPE::operator++() -> INDEXITERATOR_TYPE & {
-  auto page = guard_.As<BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>>();
-  index_in_page_++;
-  if (index_in_page_ >= page->GetSize()) {
-    if (page->GetNextPageId() == INVALID_PAGE_ID) {
-      guard_.Drop();
-      index_in_page_ = -1;
-      return *this;
-    }
-    guard_ = bpm_->ReadPage(page->GetNextPageId());
-    index_in_page_ = 0;
+  if (index_in_page_ == INVALID_INDEX) {
+    return *this;
   }
+
+  index_in_page_++;
+
+  Advance();
   return *this;
+}
+
+INDEX_TEMPLATE_ARGUMENTS
+auto INDEXITERATOR_TYPE::IsDeleted() -> bool {
+  auto page = guard_.As<BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>>();
+  return page->DeletedAt(index_in_page_);
+}
+
+INDEX_TEMPLATE_ARGUMENTS
+void INDEXITERATOR_TYPE::Advance() {
+  if (index_in_page_ == INVALID_INDEX) {
+    return;
+  }
+
+  while (true) {
+    auto page = guard_.As<BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>>();
+
+    if (index_in_page_ >= page->GetSize()) {
+      page_id_t next_page_id = page->GetNextPageId();
+
+      if (next_page_id == INVALID_PAGE_ID) {
+        index_in_page_ = INVALID_INDEX;
+        guard_.Drop();
+        return;
+      }
+
+      guard_ = bpm_->ReadPage(next_page_id);
+      index_in_page_ = 0;
+      continue;
+    }
+
+    if (!IsDeleted()) {
+      break;
+    }
+    index_in_page_++;
+  }
 }
 
 template class IndexIterator<GenericKey<4>, RID, GenericComparator<4>>;

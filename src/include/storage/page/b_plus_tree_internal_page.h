@@ -22,7 +22,7 @@
 namespace bustub {
 
 #define B_PLUS_TREE_INTERNAL_PAGE_TYPE BPlusTreeInternalPage<KeyType, ValueType, KeyComparator>
-#define INTERNAL_PAGE_HEADER_SIZE 16
+#define INTERNAL_PAGE_HEADER_SIZE 32
 #define INTERNAL_PAGE_SLOT_CNT \
   ((BUSTUB_PAGE_SIZE - INTERNAL_PAGE_HEADER_SIZE) / ((int)(sizeof(KeyType) + sizeof(ValueType))))  // NOLINT
 
@@ -74,6 +74,12 @@ class BPlusTreeInternalPage : public BPlusTreePage {
 
   auto Insert(const KeyType &key, const ValueType &value, const KeyComparator &comparator,
               std::vector<std::pair<KeyType, ValueType>> &redistributions) -> bool;
+  auto IsUnderflow() const -> bool { return GetSize() < GetMinSize(); }
+  auto IsAboveMinThreshold() const -> bool { return GetSize() > GetMinSize(); }
+  auto IsOverflow() const -> bool { return GetSize() == GetMaxSize(); }
+  auto IsFull() const -> bool { return GetSize() == GetMaxSize(); }
+  // optimistic failed, degrade to pessimistic if true
+  auto PessimisticFirst() const -> bool { return GetMaxSize() < 16 || GetSize() > GetMaxSize() / 2; }
 
   /**
    * @brief For test only, return a string representing all keys in
@@ -100,13 +106,16 @@ class BPlusTreeInternalPage : public BPlusTreePage {
 
     return kstr;
   }
+  void IncVersion() { version_++; }
+  auto GetVersion() const -> uint64_t { return version_; }
 
  private:
+  page_id_t page_id_;
+  uint64_t version_{0};
   // Array members for page data.
   KeyType key_array_[INTERNAL_PAGE_SLOT_CNT];
   ValueType page_id_array_[INTERNAL_PAGE_SLOT_CNT];
   // (Fall 2024) Feel free to add more fields and helper functions below if needed
-  page_id_t page_id_;
 };
 
 }  // namespace bustub
