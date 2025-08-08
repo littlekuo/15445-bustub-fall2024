@@ -54,8 +54,11 @@ auto InsertExecutor::Next(Tuple *tuple, RID *rid) -> bool {
   for (auto &tuple : tuples) {
     auto rid_opt = table_info_->table_->InsertTuple({0, false}, tuple, exec_ctx_->GetLockManager(),
                                                     exec_ctx_->GetTransaction(), plan_->GetTableOid());
-    for (auto &index : indexes) {
-      index->index_->InsertEntry(tuple, rid_opt.value(), exec_ctx_->GetTransaction());
+    auto rid_val = rid_opt.value();  // 安全获取RID值
+    std::cout << "Inserted tuple with RID: " << rid_val << std::endl;
+
+    for (auto index : indexes) {
+      index->index_->InsertEntry(tuple, rid_val, exec_ctx_->GetTransaction());
     }
     count++;
   }

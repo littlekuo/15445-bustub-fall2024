@@ -25,10 +25,12 @@ namespace bustub {
  */
 AggregationExecutor::AggregationExecutor(ExecutorContext *exec_ctx, const AggregationPlanNode *plan,
                                          std::unique_ptr<AbstractExecutor> &&child_executor)
-    : AbstractExecutor(exec_ctx) {}
+    : AbstractExecutor(exec_ctx), plan_(plan), child_executor_(std::move(child_executor)) {}
 
 /** Initialize the aggregation */
-void AggregationExecutor::Init() {}
+void AggregationExecutor::Init() {
+  child_executor_->Init();
+}
 
 /**
  * Yield the next tuple from the insert.

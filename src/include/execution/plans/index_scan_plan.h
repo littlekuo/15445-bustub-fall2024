@@ -12,6 +12,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <string>
 #include <utility>
 #include <vector>
@@ -94,10 +95,13 @@ class IndexScanPlanNode : public AbstractPlanNode {
       ss += fmt::format("point_lookup_keys: [");
       for (const auto &key : point_lookup_keys_) {
         ss += "(";
-        for (const auto &expr : key) {
-          ss += expr->ToString() + "";
+        for (size_t i = 0; i < key.size(); i++) {
+          ss += key[i]->ToString();
+          if (i < key.size() - 1) {
+            ss += ", ";
+          }
         }
-        ss += ") ";
+        ss += ")";
       }
       ss += "]\n";
 
@@ -108,12 +112,15 @@ class IndexScanPlanNode : public AbstractPlanNode {
       ss += "]\n";
 
       ss += "remaining_conds: [";
-      for (const auto &cond : remaining_conds_) {
-        ss += cond->ToString() + " ";
+      for(size_t i = 0; i < remaining_conds_.size(); i++) {
+        ss += remaining_conds_[i]->ToString();
+        if (i < remaining_conds_.size() - 1) {
+          ss += ", ";
+        }
       }
       ss += "]\n";
 
-      return fmt::format("IndexScan {{ index_oid={}, filter={}, others={{{}}} }}", index_oid_, filter_predicate_, ss);
+      return fmt::format("IndexScan {{ index_oid={}, filter={}, decompose={{{}}} }}", index_oid_, filter_predicate_, ss);
     }
     return fmt::format("IndexScan {{ index_oid={} }}", index_oid_);
   }

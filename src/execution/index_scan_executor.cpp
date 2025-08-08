@@ -39,15 +39,6 @@ void BuildTupleFromIndexPrefixExprs(Tuple *tuple, const std::vector<AbstractExpr
   *tuple = Tuple{values, &table_schema};
 }
 
-void BuildTupeFromGenericKey(Tuple *tuple, const IntegerKeyType_BTree &key, Schema &table_schema) {
-  std::vector<Value> values;
-  values.reserve(table_schema.GetColumns().size());
-  for (size_t i = 0; i < table_schema.GetColumns().size(); i++) {
-    values.emplace_back(key.ToValue(&table_schema, i));
-  }
-  *tuple = Tuple{values, &table_schema};
-}
-
 /**
  * Creates a new index scan executor.
  * @param exec_ctx the executor context
@@ -58,6 +49,7 @@ IndexScanExecutor::IndexScanExecutor(ExecutorContext *exec_ctx, const IndexScanP
 
 void IndexScanExecutor::Init() {
   auto table_schema = exec_ctx_->GetCatalog()->GetTable(plan_->table_oid_)->schema_;
+  table_ = exec_ctx_->GetCatalog()->GetTable(plan_->table_oid_);
   auto index_info = exec_ctx_->GetCatalog()->GetIndex(plan_->index_oid_);
   if (index_info == nullptr) {
     throw bustub::Exception("Index not found");
@@ -68,15 +60,21 @@ void IndexScanExecutor::Init() {
   // 1. point lookup
   if (!plan_->point_lookup_keys_.empty()) {
     is_point_lookup_ = true;
-    point_lookup_tuples_.reserve(plan_->point_lookup_keys_.size());
+    point_lookup_partial_tuples_.reserve(plan_->point_lookup_keys_.size());
     for (auto &constant_exprs : plan_->point_lookup_keys_) {
       Tuple tuple;
       BuildTupleFromIndexPrefixExprs(&tuple, constant_exprs, index_info, table_schema);
-      point_lookup_tuples_.emplace_back(tuple);
+      point_lookup_partial_tuples_.emplace_back(tuple);
     }
     return;
   }
   // 2. range lookup
+  if(plan_->range_lookup_conds_.empty()) {
+    // scan the whole index in by order
+    index_iterator_ = index_->GetBeginIterator();
+    return;
+  }
+
   std::vector<AbstractExpressionRef> start_key_exprs;
   ComparisonType last_comparison_type;
   for (auto &cond : plan_->range_lookup_conds_) {
@@ -84,11 +82,11 @@ void IndexScanExecutor::Init() {
     prefix_preds_.push_back(std::make_shared<ComparisonExpression>(cond.column_, cond.constant_value_, cond.type_));
     start_key_exprs.push_back(cond.constant_value_);
   }
-  BuildTupleFromIndexPrefixExprs(&start_tuple_, start_key_exprs, index_info, table_schema);
-  std::cout << start_tuple_.ToString(&table_schema) << std::endl;
+  BuildTupleFromIndexPrefixExprs(&start_partial_tuple_, start_key_exprs, index_info, table_schema);
   IntegerKeyType_BTree start_key;
-  start_key.SetFromKey(start_tuple_);
+  start_key.SetFromKey(start_partial_tuple_);
   index_iterator_ = index_->GetBeginIterator(start_key);
+  // skip the included start key if the last comparison is greater than
   if (!index_iterator_.IsEnd() && last_comparison_type == ComparisonType::GreaterThan) {
     auto [cur_key, _] = *index_iterator_;
     std::vector<uint32_t> attrs;
@@ -117,14 +115,15 @@ auto IndexScanExecutor::Next(Tuple *tuple, RID *rid) -> bool {
   // 1. point lookup
   if (is_point_lookup_) {
     while (true) {
-      if (point_lookup_idx_ >= point_lookup_tuples_.size()) {
+      if (point_lookup_idx_ >= point_lookup_partial_tuples_.size()) {
         return false;
       }
-      auto &cur_tuple = point_lookup_tuples_[point_lookup_idx_++];
+      auto &cur_tuple = point_lookup_partial_tuples_[point_lookup_idx_++];
       std::vector<RID> rid_ret;
       index_->ScanKey(cur_tuple, &rid_ret, exec_ctx_->GetTransaction());
       if (!rid_ret.empty() && select_func(cur_tuple, plan_->remaining_conds_)) {
-        *tuple = cur_tuple;
+        auto [_, tuple_] = table_->table_->GetTuple(rid_ret[0]);
+        *tuple = tuple_;
         *rid = rid_ret[0];
         return true;
       }
@@ -142,8 +141,9 @@ auto IndexScanExecutor::Next(Tuple *tuple, RID *rid) -> bool {
       return false;
     }
     auto [cur_key, cur_rid] = *index_iterator_;
-    Tuple cur_tuple;
-    BuildTupeFromGenericKey(&cur_tuple, cur_key, schema);
+    std::cout << cur_key.ToString() << " " << cur_rid << std::endl;
+    auto [meta, cur_tuple] = table_->table_->GetTuple(cur_rid);
+    std::cout << cur_tuple.ToString(&schema) << std::endl;
     if (!select_func(cur_tuple, prefix_preds_)) {
       index_iterator_ = index_->GetEndIterator();
       return false;
