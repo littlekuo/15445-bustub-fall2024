@@ -43,7 +43,7 @@ class IndexScanExecutor : public AbstractExecutor {
  private:
   /** The index scan plan node to be executed. */
   const IndexScanPlanNode *plan_;
-  std::shared_ptr<TableInfo> table_;
+  std::shared_ptr<TableInfo> table_info_;
   BPlusTreeIndexForTwoIntegerColumn *index_;
   BPlusTreeIndexIteratorForTwoIntegerColumn index_iterator_;
   bool is_point_lookup_{false};

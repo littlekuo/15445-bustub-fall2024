@@ -11,6 +11,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "execution/executors/index_scan_executor.h"
+#include "concurrency/transaction_manager.h"
+#include "execution/execution_common.h"
 #include "optimizer/optimizer.h"
 #include "optimizer/optimizer_internal.h"
 
@@ -52,7 +54,7 @@ void IndexScanExecutor::Init() {
   remaining_conds_.clear();
 
   auto table_schema = exec_ctx_->GetCatalog()->GetTable(plan_->table_oid_)->schema_;
-  table_ = exec_ctx_->GetCatalog()->GetTable(plan_->table_oid_);
+  table_info_ = exec_ctx_->GetCatalog()->GetTable(plan_->table_oid_);
   auto index_info = exec_ctx_->GetCatalog()->GetIndex(plan_->index_oid_);
   if (index_info == nullptr) {
     throw bustub::Exception("Index not found");
@@ -63,8 +65,11 @@ void IndexScanExecutor::Init() {
   // 1. no filter predicate
   if (plan_->filter_predicate_ == nullptr) {
     index_iterator_ = index_->GetBeginIterator();
+    AbstractExpressionRef dummy_pred = std::make_shared<ConstantValueExpression>(Value(BOOLEAN, 1));
+    exec_ctx_->GetTransaction()->AppendScanPredicate(plan_->table_oid_, dummy_pred);
     return;
   }
+  exec_ctx_->GetTransaction()->AppendScanPredicate(plan_->table_oid_, plan_->filter_predicate_);
 
   {
     // 2. point lookup without remaining conditions
@@ -158,9 +163,22 @@ auto IndexScanExecutor::Next(Tuple *tuple, RID *rid) -> bool {
       std::vector<RID> rid_ret;
       index_->ScanKey(cur_tuple, &rid_ret, exec_ctx_->GetTransaction());
       if (!rid_ret.empty()) {
-        auto [_, tuple_] = table_->table_->GetTuple(rid_ret[0]);
-        if (select_func(tuple_, remaining_conds_)) {
-          *tuple = tuple_;
+        auto [tuple_meta_, tuple_, undo_link] =
+            GetTupleAndUndoLink(exec_ctx_->GetTransactionManager(), table_info_->table_.get(), rid_ret[0]);
+        auto undo_logs = CollectUndoLogs(rid_ret[0], tuple_meta_, tuple_, undo_link, exec_ctx_->GetTransaction(),
+                                         exec_ctx_->GetTransactionManager());
+        if (!undo_logs.has_value()) {
+          // means tuple is not exist at that time
+          continue;
+        }
+        auto rebuild_tuple = ReconstructTuple(&GetOutputSchema(), tuple_, tuple_meta_, undo_logs.value());
+        if (!rebuild_tuple.has_value()) {
+          // means tuple is deleted
+          continue;
+        }
+        if (select_func(rebuild_tuple.value(), remaining_conds_)) {
+          rebuild_tuple->SetRid(rid_ret[0]);
+          *tuple = rebuild_tuple.value();
           *rid = rid_ret[0];
           return true;
         }
@@ -179,16 +197,29 @@ auto IndexScanExecutor::Next(Tuple *tuple, RID *rid) -> bool {
       return false;
     }
     auto [cur_key, cur_rid] = *index_iterator_;
-    auto [meta, cur_tuple] = table_->table_->GetTuple(cur_rid);
-    if (!select_func(cur_tuple, prefix_preds_)) {
-      index_iterator_ = index_->GetEndIterator();
-      return false;
-    }
-    if (!select_func(cur_tuple, remaining_conds_)) {
+    auto [tuple_meta, tuple_, undo_link] =
+        GetTupleAndUndoLink(exec_ctx_->GetTransactionManager(), table_info_->table_.get(), cur_rid);
+    auto undo_logs = CollectUndoLogs(cur_rid, tuple_meta, tuple_, undo_link, exec_ctx_->GetTransaction(),
+                                     exec_ctx_->GetTransactionManager());
+    if (!undo_logs.has_value()) {
       ++index_iterator_;
       continue;
     }
-    *tuple = cur_tuple;
+    auto rebuild_tuple = ReconstructTuple(&GetOutputSchema(), tuple_, tuple_meta, undo_logs.value());
+    if (!rebuild_tuple.has_value()) {
+      ++index_iterator_;
+      continue;
+    }
+    if (!select_func(rebuild_tuple.value(), prefix_preds_)) {
+      index_iterator_ = index_->GetEndIterator();
+      return false;
+    }
+    if (!select_func(rebuild_tuple.value(), remaining_conds_)) {
+      ++index_iterator_;
+      continue;
+    }
+    rebuild_tuple->SetRid(cur_rid);
+    *tuple = rebuild_tuple.value();
     *rid = cur_rid;
     ++index_iterator_;
     break;

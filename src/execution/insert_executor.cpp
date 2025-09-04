@@ -12,6 +12,8 @@
 
 #include <memory>
 
+#include "concurrency/transaction_manager.h"
+#include "execution/execution_common.h"
 #include "execution/executors/insert_executor.h"
 
 namespace bustub {
@@ -46,23 +48,33 @@ auto InsertExecutor::Next(Tuple *tuple, RID *rid) -> bool {
   if (inserted_) {
     return false;
   }
-  int32_t count = 0;
   auto indexes = exec_ctx_->GetCatalog()->GetTableIndexes(table_info_->name_);
   std::vector<Tuple> tuples;
   while (child_executor_->Next(tuple, rid)) {
     tuples.emplace_back(std::move(*tuple));
   }
   for (auto &cur_tuple : tuples) {
-    auto rid_opt = table_info_->table_->InsertTuple({0, false}, cur_tuple, exec_ctx_->GetLockManager(),
-                                                    exec_ctx_->GetTransaction(), plan_->GetTableOid());
+    std::optional<RID> rid_opt = std::nullopt;
     for (const auto &index : indexes) {
-      index->index_->InsertEntry(
-          cur_tuple.KeyFromTuple(table_info_->schema_, index->key_schema_, index->index_->GetKeyAttrs()),
-          rid_opt.value(), exec_ctx_->GetTransaction());
+      // only consider primary key
+      if (!index->is_primary_key_) {
+        continue;
+      }
+      auto ret = CheckKeyIfExistInIndex(&table_info_->schema_, &cur_tuple, index.get(), exec_ctx_->GetTransaction(),
+                                        table_info_.get());
+      if (ret.first) {
+        exec_ctx_->GetTransaction()->SetTainted();
+        throw ExecutionException("Duplicate key");
+      }
+      if (ret.second.GetPageId() != INVALID_PAGE_ID) {
+        rid_opt = ret.second;
+      }
     }
-    count++;
+    InsertTupleAndIndexKey(&cur_tuple, exec_ctx_->GetTransactionManager(), exec_ctx_->GetTransaction(),
+                           table_info_.get(), rid_opt, exec_ctx_->GetLockManager(), indexes);
+    exec_ctx_->GetTransaction()->AppendWriteSet(table_info_->oid_, rid_opt.value());
   }
-  *tuple = Tuple({Value(TypeId::INTEGER, count)}, &GetOutputSchema());
+  *tuple = Tuple({Value(TypeId::INTEGER, static_cast<int32_t>(tuples.size()))}, &GetOutputSchema());
   inserted_ = true;
   return true;
 }

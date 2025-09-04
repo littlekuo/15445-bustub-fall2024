@@ -12,6 +12,7 @@
 
 #pragma once
 
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -61,6 +62,21 @@ auto GenerateUpdatedUndoLog(const Schema *schema, const Tuple *base_tuple, const
 
 void TxnMgrDbg(const std::string &info, TransactionManager *txn_mgr, const TableInfo *table_info,
                TableHeap *table_heap);
+
+auto IsWriteWriteConflict(Transaction *txn, timestamp_t ts) -> bool;
+
+auto GenerateOrFindUndoLink(const Schema *schema, TransactionManager *txn_mgr, Transaction *txn,
+                            const Tuple *base_tuple, timestamp_t original_ts, const Tuple *target_tuple,
+                            std::optional<UndoLink> original_undo_link) -> std::optional<UndoLink>;
+
+auto GetUndoLogSchema(const Schema *schema, const UndoLog &log) -> Schema;
+
+auto CheckKeyIfExistInIndex(const Schema *table_schema, const Tuple *tuple, IndexInfo *index_info, Transaction *txn,
+                            const TableInfo *table_info) -> std::pair<bool, RID>;
+
+void InsertTupleAndIndexKey(const Tuple *new_tuple, TransactionManager *txn_mgr, Transaction *txn,
+                            const TableInfo *table_info, std::optional<RID> &rid_opt, LockManager *lock_mgr,
+                            std::vector<std::shared_ptr<IndexInfo>> &indexes);
 
 // TODO(P4): Add new functions as needed... You are likely need to define some more functions.
 //

@@ -11,6 +11,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "execution/executors/seq_scan_executor.h"
+#include "concurrency/transaction_manager.h"
+#include "execution/execution_common.h"
 #include "optimizer/optimizer.h"
 #include "optimizer/optimizer_internal.h"
 
@@ -26,10 +28,13 @@ SeqScanExecutor::SeqScanExecutor(ExecutorContext *exec_ctx, const SeqScanPlanNod
 
 /** Initialize the sequential scan */
 void SeqScanExecutor::Init() {
-  auto table_info = exec_ctx_->GetCatalog()->GetTable(plan_->GetTableOid());
+  table_info_ = exec_ctx_->GetCatalog()->GetTable(plan_->GetTableOid());
   iter_ = nullptr;
-  if (table_info != nullptr) {
-    iter_ = std::make_unique<TableIterator>(table_info->table_->MakeIterator());
+  if (table_info_ != nullptr) {
+    iter_ = std::make_unique<TableIterator>(table_info_->table_->MakeIterator());
+    AbstractExpressionRef dummy_pred = std::make_shared<ConstantValueExpression>(Value(BOOLEAN, 1));
+    exec_ctx_->GetTransaction()->AppendScanPredicate(
+        plan_->GetTableOid(), plan_->filter_predicate_ != nullptr ? plan_->filter_predicate_ : dummy_pred);
     return;
   }
   throw bustub::Exception("table not found");
@@ -52,11 +57,25 @@ auto SeqScanExecutor::Next(Tuple *tuple, RID *rid) -> bool {
     if (iter_->IsEnd()) {
       return false;
     }
-    auto [tuple_meta, tuple_] = iter_->GetTuple();
-    if (tuple_meta.is_deleted_) {
+    // ensure atomic read
+    auto cur_rid = iter_->GetRID();
+    auto [tuple_meta, tuple_, undo_link] =
+        GetTupleAndUndoLink(exec_ctx_->GetTransactionManager(), table_info_->table_.get(), cur_rid);
+    auto undo_logs = CollectUndoLogs(iter_->GetRID(), tuple_meta, tuple_, undo_link, exec_ctx_->GetTransaction(),
+                                     exec_ctx_->GetTransactionManager());
+    if (!undo_logs.has_value()) {
+      // means tuple is not exist at that time
       ++(*iter_);
       continue;
     }
+    auto rebuild_tuple = ReconstructTuple(&GetOutputSchema(), tuple_, tuple_meta, undo_logs.value());
+    if (!rebuild_tuple.has_value()) {
+      // means tuple is deleted
+      ++(*iter_);
+      continue;
+    }
+    rebuild_tuple->SetRid(cur_rid);
+    tuple_ = rebuild_tuple.value();
     if (plan_->filter_predicate_ != nullptr) {
       auto value = plan_->filter_predicate_->Evaluate(&tuple_, GetOutputSchema());
       if (value.IsNull() || !value.GetAs<bool>()) {
@@ -66,7 +85,7 @@ auto SeqScanExecutor::Next(Tuple *tuple, RID *rid) -> bool {
     }
 
     *tuple = tuple_;
-    *rid = iter_->GetRID();
+    *rid = cur_rid;
     ++(*iter_);
     break;
   }

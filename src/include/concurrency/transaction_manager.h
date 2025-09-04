@@ -21,6 +21,7 @@
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 #include "catalog/schema.h"
 #include "common/config.h"
@@ -31,6 +32,28 @@
 #include "storage/table/tuple.h"
 
 namespace bustub {
+
+template <typename Func>
+class DeferGuard {
+ public:
+  explicit DeferGuard(Func &&func) noexcept : func_(std::forward<Func>(func)) {}
+  DeferGuard(DeferGuard &&other) noexcept : func_(std::move(other.func_)), active_(other.active_) {
+    other.active_ = false;
+  }
+  ~DeferGuard() {
+    if (active_) {
+      func_();
+    }
+  }
+  void Cancel() { active_ = false; }
+  DeferGuard(const DeferGuard &) = delete;
+  auto operator=(const DeferGuard &) -> DeferGuard & = delete;
+
+ private:
+  Func func_;
+  bool active_{true};
+};
+
 /**
  * TransactionManager keeps track of all the transactions running in the system.
  */

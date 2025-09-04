@@ -64,9 +64,10 @@ auto RewriteExpression(const AbstractExpressionRef &expr, uint32_t left_col_coun
 
 auto Optimizer::OptimizeCustom(const AbstractPlanNodeRef &plan) -> AbstractPlanNodeRef {
   auto p = plan;
-  // std::cout << "original: " << p->ToString() << std::endl;
+  p = OptimizeMergeProjection(p);
+  p = OptimizeMergeFilterNLJ(p);
+  p = OptimizeMergeFilterScan(p);
   p = OptimizeColumnPruning(p);
-  // std::cout << "after column pruning: " << p->ToString() << std::endl;
   p = OptimizeConstantFolding(p);
   p = OptimizeMergeProjection(p);
   p = OptimizeMergeFilterNLJ(p);

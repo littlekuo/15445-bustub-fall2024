@@ -12,6 +12,8 @@
 
 #include <memory>
 
+#include "concurrency/transaction_manager.h"
+#include "execution/execution_common.h"
 #include "execution/executors/delete_executor.h"
 
 namespace bustub {
@@ -46,25 +48,46 @@ auto DeleteExecutor::Next(Tuple *tuple, RID *rid) -> bool {
     return false;
   }
 
-  int32_t count = 0;
-  std::vector<std::pair<Tuple, RID>> tuples;
+  std::vector<Tuple> tuples;
   auto indexes = exec_ctx_->GetCatalog()->GetTableIndexes(table_info_->name_);
-  // collect first
+  // collect old tuples and detect conflict
   while (child_executor_->Next(tuple, rid)) {
-    tuples.emplace_back(std::make_pair(std::move(*tuple), *rid));
-    count++;
-  }
-  for (auto &[tuple, rid] : tuples) {
-    auto tuple_meta = table_info_->table_->GetTupleMeta(rid);
-    tuple_meta.is_deleted_ = true;
-    table_info_->table_->UpdateTupleMeta(tuple_meta, rid);
-    for (auto &index : indexes) {
-      index->index_->DeleteEntry(
-          tuple.KeyFromTuple(table_info_->schema_, index->key_schema_, index->index_->GetKeyAttrs()), rid,
-          exec_ctx_->GetTransaction());
+    auto tuple_meta = table_info_->table_->GetTupleMeta(*rid);
+    if (IsWriteWriteConflict(exec_ctx_->GetTransaction(), tuple_meta.ts_)) {
+      exec_ctx_->GetTransaction()->SetTainted();
+      throw ExecutionException("w-w conflict with other committed txn");
     }
+    tuples.emplace_back(*tuple);
   }
-  *tuple = Tuple({Value(TypeId::INTEGER, count)}, &GetOutputSchema());
+  for (auto &tuple : tuples) {
+    auto tuple_link_info =
+        GetTupleAndUndoLink(exec_ctx_->GetTransactionManager(), table_info_->table_.get(), tuple.GetRid());
+    auto tuple_meta = std::get<0>(tuple_link_info);
+    if (IsWriteWriteConflict(exec_ctx_->GetTransaction(), tuple_meta.ts_)) {
+      exec_ctx_->GetTransaction()->SetTainted();
+      throw ExecutionException("w-w conflict with other committed txn");
+    }
+    BUSTUB_ASSERT(!tuple_meta.is_deleted_, "Cannot delete a tuple that is already deleted");
+    auto target_undo_link =
+        GenerateOrFindUndoLink(&table_info_->schema_, exec_ctx_->GetTransactionManager(), exec_ctx_->GetTransaction(),
+                               &tuple, tuple_meta.ts_, nullptr, std::get<2>(tuple_link_info));
+    auto cur_ts = tuple_meta.ts_;
+    auto check = [cur_ts](const TupleMeta &meta, const Tuple &tuple, RID rid, std::optional<UndoLink>) {
+      return meta.ts_ == cur_ts;
+    };
+    tuple_meta.ts_ = exec_ctx_->GetTransaction()->GetTransactionTempTs();
+    tuple_meta.is_deleted_ = true;
+    auto updated =
+        UpdateTupleAndUndoLink(exec_ctx_->GetTransactionManager(), tuple.GetRid(), target_undo_link,
+                               table_info_->table_.get(), exec_ctx_->GetTransaction(), tuple_meta, tuple, check);
+    if (!updated) {
+      exec_ctx_->GetTransaction()->SetTainted();
+      throw ExecutionException("Delete failed");
+    }
+    exec_ctx_->GetTransaction()->AppendWriteSet(table_info_->oid_, tuple.GetRid());
+    // don't update primary index to support read history tuple (only consider primary key)
+  }
+  *tuple = Tuple({Value(TypeId::INTEGER, static_cast<int32_t>(tuples.size()))}, &GetOutputSchema());
   deleted_ = true;
   return true;
 }
